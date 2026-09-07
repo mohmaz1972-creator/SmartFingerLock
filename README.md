@@ -106,7 +106,7 @@ graph TD
     class S_TX,S_RX,D1,D2 data;
 
 ```
-##💻 Software Setup & Installation
+## 💻 Software Setup & Installation
 * **Install Arduino IDE and add the ESP8266 Board Manager** url: http://arduino.esp8266.com/stable/package_esp8266com_index.json.
 * **Go to** Tools > Board > Boards Manager **search for ESP8266 and install it. Select NodeMCU 1.0 (ESP-12E Module).**
 * **Go to** Sketch > Include Library > Manage Libraries **search for and install Adafruit Fingerprint Sensor Library.**
@@ -120,10 +120,13 @@ const char* www_password = "admin123";
 ```
 * **Connect your NodeMCU via USB and click Upload.**
 
-###🚀 How to Use
+## 🚀 How to Use:
 1.Once the NodeMCU boots up, take your smartphone or laptop and connect to the Wi-Fi network named SmartLock (Password: password123).
+
 2.Open your web browser and navigate to 192.168.4.1.
+
 3.A login prompt will appear. Enter admin for the username and admin123 for the password.
+
 4.Welcome to the Dashboard! Here you can:
 
 *    Enter an ID (1-127) and a Name, then click Start Enrollment. Follow the on-screen instructions (Place finger, remove, place again) in real-time.
@@ -131,5 +134,6 @@ const char* www_password = "admin123";
 *    View the list of active users retrieved from the EEPROM.
 
 *    Delete existing users with a single click.
+
 
 5.In normal mode, simply place a registered finger on the sensor. The relay will click, opening the electronic lock for 3 seconds.
