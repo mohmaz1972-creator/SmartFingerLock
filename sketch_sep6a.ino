@@ -1,0 +1,311 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <SoftwareSerial.h>
+#include <Adafruit_Fingerprint.h>
+#include <EEPROM.h>
+
+// --- WiFi AP Settings ---
+const char* ssid = "SmartLock"; 
+const char* password = "password123";
+
+// --- Admin Panel Credentials ---
+const char* www_username = "admin";
+const char* www_password = "admin123";
+
+ESP8266WebServer server(80);
+
+// --- Hardware Pins ---
+SoftwareSerial mySerial(5, 4); // D1 (RX), D2 (TX)
+Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
+#define RELAY_PIN 12 // D6
+
+// --- Non-blocking Variables ---
+unsigned long relayTimer = 0;
+bool relayActive = false;
+
+// Enrollment State Machine
+int enrollState = 0; // 0:Idle, 1:Wait Finger 1, 2:Wait Remove, 3:Wait Finger 2
+int enrollId = 0;
+String enrollName = "";
+String statusMessage = "System Ready.";
+
+// --- EEPROM Structure for Names ---
+struct UserRecord {
+  byte active; // 1 if used, 0 or 255 if empty
+  char name[15];
+};
+
+// ==========================================
+// HTML & JS (Single Page Application)
+// ==========================================
+const char MAIN_page[] PROGMEM = R"=====(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Lock Admin</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #1e1e2f; color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    .card { background: #2a2a40; padding: 25px; border-radius: 12px; box-shadow: 0 8px 16px rgba(0,0,0,0.3); width: 100%; max-width: 500px; margin-bottom: 20px;}
+    h2 { margin-top: 0; color: #00d2ff; text-align: center; border-bottom: 1px solid #444; padding-bottom: 10px;}
+    input, button { width: 100%; padding: 12px; margin: 8px 0; border-radius: 6px; border: none; box-sizing: border-box; font-size: 15px;}
+    input { background: #3b3b55; color: #fff; }
+    button { background: #00d2ff; color: #1e1e2f; font-weight: bold; cursor: pointer; transition: 0.3s; }
+    button:hover { background: #00a8cc; }
+    .btn-danger { background: #ff4757; color: white; width: auto; padding: 6px 12px; font-size: 13px;}
+    .btn-danger:hover { background: #ff2438; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #444; }
+    th { color: #00d2ff; }
+    .status-box { background: #3b3b55; padding: 15px; border-radius: 6px; text-align: center; color: #00ea90; font-weight: bold; min-height: 20px;}
+    .flex-row { display: flex; gap: 10px; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>Add New User</h2>
+    <div class="flex-row">
+      <input type="number" id="newId" placeholder="ID (1-127)" min="1" max="127">
+      <input type="text" id="newName" placeholder="User Name" maxlength="14">
+    </div>
+    <button onclick="startEnroll()">Start Enrollment</button>
+    <div class="status-box" id="statusBox">System Ready.</div>
+  </div>
+
+  <div class="card">
+    <h2>Registered Users</h2>
+    <button onclick="loadUsers()" style="background:#555; color:white;">Refresh List</button>
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Name</th><th>Action</th></tr>
+      </thead>
+      <tbody id="userTable">
+        <!-- Data loaded via JS -->
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    setInterval(checkStatus, 1500); // Poll status every 1.5s
+    loadUsers(); // Load on start
+
+    function checkStatus() {
+      fetch('/api/status')
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById('statusBox').innerText = data.msg;
+          if(data.msg.includes("successfully") || data.msg.includes("Error")) {
+            setTimeout(loadUsers, 2000); // Refresh list if done
+          }
+        });
+    }
+
+    function startEnroll() {
+      let id = document.getElementById('newId').value;
+      let name = document.getElementById('newName').value;
+      if(!id || !name) { alert("Please enter ID and Name"); return; }
+      fetch(`/api/enroll?id=${id}&name=${name}`)
+        .then(res => res.text())
+        .then(msg => document.getElementById('statusBox').innerText = msg);
+    }
+
+    function loadUsers() {
+      fetch('/api/list')
+        .then(res => res.json())
+        .then(data => {
+          let html = '';
+          data.forEach(user => {
+            html += `<tr>
+              <td>${user.id}</td>
+              <td>${user.name}</td>
+              <td><button class="btn-danger" onclick="deleteUser(${user.id})">Delete</button></td>
+            </tr>`;
+          });
+          document.getElementById('userTable').innerHTML = html;
+        });
+    }
+
+    function deleteUser(id) {
+      if(!confirm("Delete user ID " + id + "?")) return;
+      fetch(`/api/delete?id=${id}`)
+        .then(() => loadUsers());
+    }
+  </script>
+</body>
+</html>
+)=====";
+
+
+// ==========================================
+// Setup
+// ==========================================
+void setup() {
+  Serial.begin(115200);
+  EEPROM.begin(2048); // Allocate memory for 127 users
+
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, LOW);
+
+  // Start AP
+  WiFi.softAP(ssid, password);
+  Serial.println("\nAP Started. IP: " + WiFi.softAPIP().toString());
+
+  // Init Fingerprint
+  finger.begin(57600);
+  if (finger.verifyPassword()) {
+    Serial.println("Sensor Found!");
+  } else {
+    Serial.println("Sensor Error!");
+  }
+
+  // Define Web Routes
+  server.on("/", []() {
+    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    server.send(200, "text/html", MAIN_page);
+  });
+
+  server.on("/api/status", handleStatus);
+  server.on("/api/list", handleList);
+  server.on("/api/enroll", handleEnrollStart);
+  server.on("/api/delete", handleDelete);
+  
+  server.begin();
+}
+
+// ==========================================
+// Main Loop (Non-Blocking)
+// ==========================================
+void loop() {
+  server.handleClient();
+  
+  // Non-blocking Relay Timer
+  if (relayActive && millis() > relayTimer) {
+    digitalWrite(RELAY_PIN, LOW);
+    relayActive = false;
+    Serial.println("Relay OFF");
+  }
+
+  // State Machine
+  if (enrollState == 0) {
+    checkAccess(); // Normal checking mode
+  } else {
+    processEnrollment(); // Enrollment mode
+  }
+}
+
+// ==========================================
+// Functions
+// ==========================================
+void triggerRelay() {
+  digitalWrite(RELAY_PIN, HIGH);
+  relayTimer = millis() + 3000; // Keep ON for 3 seconds
+  relayActive = true;
+  Serial.println("Access Granted!");
+}
+
+void checkAccess() {
+  uint8_t p = finger.getImage();
+  if (p != FINGERPRINT_OK) return;
+  p = finger.image2Tz();
+  if (p != FINGERPRINT_OK) return;
+  p = finger.fingerFastSearch();
+  
+  if (p == FINGERPRINT_OK) {
+    triggerRelay();
+    // Optional: You could read the name from EEPROM and print it here
+  }
+}
+
+// --- Web API Handlers ---
+void handleStatus() {
+  if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+  server.send(200, "application/json", "{\"msg\":\"" + statusMessage + "\"}");
+}
+
+void handleList() {
+  if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+  String json = "[";
+  bool first = true;
+  for (int i = 1; i <= 127; i++) {
+    UserRecord u;
+    EEPROM.get(i * sizeof(UserRecord), u);
+    if (u.active == 1) {
+      if (!first) json += ",";
+      json += "{\"id\":" + String(i) + ",\"name\":\"" + String(u.name) + "\"}";
+      first = false;
+    }
+  }
+  json += "]";
+  server.send(200, "application/json", json);
+}
+
+void handleEnrollStart() {
+  if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+  if (server.hasArg("id") && server.hasArg("name")) {
+    enrollId = server.arg("id").toInt();
+    enrollName = server.arg("name");
+    enrollState = 1; // Start process
+    statusMessage = "Place finger on sensor...";
+    server.send(200, "text/plain", "Starting...");
+  } else {
+    server.send(400, "text/plain", "Missing args");
+  }
+}
+
+void handleDelete() {
+  if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+  if (server.hasArg("id")) {
+    int id = server.arg("id").toInt();
+    
+    // Remove from sensor
+    finger.deleteModel(id);
+    
+    // Remove from EEPROM
+    UserRecord emptyUser = {0, ""};
+    EEPROM.put(id * sizeof(UserRecord), emptyUser);
+    EEPROM.commit();
+    
+    server.send(200, "text/plain", "Deleted");
+  }
+}
+
+// --- Non-Blocking Enrollment Logic ---
+void processEnrollment() {
+  uint8_t p = finger.getImage();
+  
+  if (enrollState == 1) {
+    if (p == FINGERPRINT_OK) {
+      finger.image2Tz(1);
+      statusMessage = "Remove finger...";
+      enrollState = 2;
+    }
+  } 
+  else if (enrollState == 2) {
+    if (p == FINGERPRINT_NOFINGER) {
+      statusMessage = "Place SAME finger again...";
+      enrollState = 3;
+    }
+  } 
+  else if (enrollState == 3) {
+    if (p == FINGERPRINT_OK) {
+      finger.image2Tz(2);
+      if (finger.createModel() == FINGERPRINT_OK) {
+        finger.storeModel(enrollId);
+        
+        // Save Name to EEPROM
+        UserRecord u;
+        u.active = 1;
+        enrollName.toCharArray(u.name, 15);
+        EEPROM.put(enrollId * sizeof(UserRecord), u);
+        EEPROM.commit();
+        
+        statusMessage = "User " + enrollName + " saved successfully!";
+      } else {
+        statusMessage = "Error: Did not match. Try again.";
+      }
+      enrollState = 0; // Return to idle
+    }
+  }
+}
