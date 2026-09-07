@@ -120,3 +120,16 @@ const char* www_password = "admin123";
 ```
 * **Connect your NodeMCU via USB and click Upload.**
 
+###🚀 How to Use
+1.Once the NodeMCU boots up, take your smartphone or laptop and connect to the Wi-Fi network named SmartLock (Password: password123).
+2.Open your web browser and navigate to 192.168.4.1.
+3.A login prompt will appear. Enter admin for the username and admin123 for the password.
+4.Welcome to the Dashboard! Here you can:
+
+*    Enter an ID (1-127) and a Name, then click Start Enrollment. Follow the on-screen instructions (Place finger, remove, place again) in real-time.
+
+*    View the list of active users retrieved from the EEPROM.
+
+*    Delete existing users with a single click.
+
+5.In normal mode, simply place a registered finger on the sensor. The relay will click, opening the electronic lock for 3 seconds.
