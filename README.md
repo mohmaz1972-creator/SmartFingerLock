@@ -107,4 +107,16 @@ graph TD
 
 ```
 ##💻 Software Setup & Installation
-* **Install Arduino IDE and add the ESP8266 Board Manager url: http://arduino.esp8266.com/stable/package_esp8266com_index.json.
+* **Install Arduino IDE and add the ESP8266 Board Manager** url: http://arduino.esp8266.com/stable/package_esp8266com_index.json.
+* **Go to** Tools > Board > Boards Manager **search for ESP8266 and install it. Select NodeMCU 1.0 (ESP-12E Module).**
+* **Go to** Sketch > Include Library > Manage Libraries **search for and install Adafruit Fingerprint Sensor Library.**
+* **Open the** .ino **file provided in this repository.**
+* **(Optional) Change the default Wi-Fi credentials and Admin login details at the top of the code:**
+```
+const char* ssid = "SmartLock"; 
+const char* password = "password123";
+const char* www_username = "admin";
+const char* www_password = "admin123";
+```
+* **Connect your NodeMCU via USB and click Upload.**
+
