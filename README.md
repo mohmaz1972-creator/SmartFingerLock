@@ -104,3 +104,7 @@ graph TD
     class S_5V,VIN,R_VCC,Power_POS power;
     class S_GND,GND,R_GND,Power_NEG ground;
     class S_TX,S_RX,D1,D2 data;
+
+```
+##💻 Software Setup & Installation
+* **Install Arduino IDE and add the ESP8266 Board Manager url: http://arduino.esp8266.com/stable/package_esp8266com_index.json.
